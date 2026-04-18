@@ -28,16 +28,16 @@ Restaurant SaaS System helps multi-location restaurants operate consistently and
 
 ## Screenshots
 
-![Dashboard](./screenshots/dashboard.png)  
+![Dashboard](./restaurant-saas/screenshots/dashboard.png)  
 _Dashboard analytics and KPIs._
 
-![Menu - Branch View](./screenshots/menu.png)  
+![Menu - Branch View](./restaurant-saas/screenshots/menu.png)  
 _Branch-specific menu and URL preview._
 
-![Cart](./screenshots/cart.png)  
+![Cart](./restaurant-saas/screenshots/cart.png)  
 _Branch-scoped cart with persistent session._
 
-![Order Tracking](./screenshots/tracking.png)  
+![Order Tracking](./restaurant-saas/screenshots/tracking.png)  
 _Live order tracking and status updates._
 
 ## Installation & Setup
