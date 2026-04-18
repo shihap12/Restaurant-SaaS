@@ -23,11 +23,18 @@ Centralized order management, branch-scoped carts, and live fulfillment for rest
 
 Restaurant SaaS System is a production-grade SaaS platform that centralizes menus, branch operations, and order routing while enforcing branch-scoped ordering and real-time fulfillment. The platform reduces fulfillment errors, shortens wait times, and surfaces actionable KPIs for managers.
 
-## 🧠 Problem  
-🧩 Multi-branch restaurants suffer from order mismatches, slow fulfillment, and inconsistent operations.
+## Problem 🚨
+- 🍽️ Multi-branch restaurants suffer from order mismatches between branches  
+- ⏱️ Slow and inconsistent order fulfillment across locations  
+- 📉 Lack of unified analytics and operational visibility  
+- ❌ Human errors when orders are not scoped per branch  
 
-## ⚡ Solution  
-🚀 A centralized SaaS system that enforces branch-scoped ordering with real-time fulfillment and analytics.
+## Solution 💡
+- 🧠 A centralized SaaS system that enforces **branch-scoped ordering**
+- ⚡ Real-time order tracking and fulfillment using WebSockets  
+- 📊 Unified dashboards for revenue, performance, and analytics  
+- 🔒 Strict data isolation per branch (`branch_id`) to prevent mistakes  
+- 🛒 Persistent cart system to reduce order abandonment  
 
 ## Key Features
 
