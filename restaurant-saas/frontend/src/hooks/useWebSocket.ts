@@ -6,16 +6,27 @@
  * but polling every 5-10s gives a great real-time feel on XAMPP.
  */
 
-import { useEffect, useRef, useCallback } from 'react';
-import { orderApi } from '@/api';
-import type { OrderStatus, Notification } from '@/types';
+import { useEffect, useRef, useCallback } from "react";
+import { orderApi } from "@/api";
+import type { OrderStatus, Notification } from "@/types";
 
 // ─── Branch Orders polling ────────────────────
 interface UseBranchOrdersOptions {
   branchId: number;
-  onNewOrder?:   (event: { order_id: number; order_number: string; customer_name: string; total: number; type: string; table_number?: string }) => void;
-  onOrderUpdate?:(event: { order_id: number; order_number: string; status: string }) => void;
-  intervalMs?:   number;
+  onNewOrder?: (event: {
+    order_id: number;
+    order_number: string;
+    customer_name: string;
+    total: number;
+    type: string;
+    table_number?: string;
+  }) => void;
+  onOrderUpdate?: (event: {
+    order_id: number;
+    order_number: string;
+    status: string;
+  }) => void;
+  intervalMs?: number;
 }
 
 export function useBranchOrders({
@@ -24,27 +35,40 @@ export function useBranchOrders({
   onOrderUpdate,
   intervalMs = 8000,
 }: UseBranchOrdersOptions) {
-  const lastOrderIdRef   = useRef<number>(0);
+  const lastOrderIdRef = useRef<number>(0);
   const lastStatusMapRef = useRef<Record<number, string>>({});
-  const timerRef         = useRef<ReturnType<typeof setInterval>>();
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   const poll = useCallback(async () => {
     if (!branchId) return;
     try {
-      const res   = await orderApi.getAll(branchId, { status: 'active', per_page: 50, today: true });
-      const orders = (res.data.data as { id: number; order_number: string; status: string; customer_name: string; total: number; type: string; table_number?: string }[]) ?? [];
+      const res = await orderApi.getAll(branchId, {
+        status: "active",
+        per_page: 50,
+        today: true,
+      });
+      const orders =
+        (res.data.data as {
+          id: number;
+          order_number: string;
+          status: string;
+          customer_name: string;
+          total: number;
+          type: string;
+          table_number?: string;
+        }[]) ?? [];
 
       for (const order of orders) {
         // Detect new orders
         if (order.id > lastOrderIdRef.current) {
           if (lastOrderIdRef.current > 0) {
             onNewOrder?.({
-              order_id:      order.id,
-              order_number:  order.order_number,
+              order_id: order.id,
+              order_number: order.order_number,
               customer_name: order.customer_name,
-              total:         order.total,
-              type:          order.type,
-              table_number:  order.table_number,
+              total: order.total,
+              type: order.type,
+              table_number: order.table_number,
             });
           }
           lastOrderIdRef.current = Math.max(lastOrderIdRef.current, order.id);
@@ -54,18 +78,37 @@ export function useBranchOrders({
         const prevStatus = lastStatusMapRef.current[order.id];
         if (prevStatus && prevStatus !== order.status) {
           onOrderUpdate?.({
-            order_id:     order.id,
+            order_id: order.id,
             order_number: order.order_number,
-            status:       order.status,
+            status: order.status,
           });
+
+          // ─── FIX: بث حدث عبر CustomEvent عند اكتشاف تغيير في الـ polling ──────
+          // هذا يضمن أن تبويب الكاشير يستقبل التحديث حتى لو جاء من الـ polling
+          // وليس فقط من BroadcastChannel أو localStorage
+          try {
+            window.dispatchEvent(
+              new CustomEvent("restory:order:update", {
+                detail: {
+                  id: order.id,
+                  status: order.status,
+                  ts: Date.now(),
+                },
+              }),
+            );
+          } catch {
+            // تجاهل أخطاء dispatchEvent بصمت
+          }
         }
         lastStatusMapRef.current[order.id] = order.status;
       }
 
       // Seed lastOrderId on first poll
       if (lastOrderIdRef.current === 0 && orders.length > 0) {
-        lastOrderIdRef.current = Math.max(...orders.map(o => o.id));
-        orders.forEach(o => { lastStatusMapRef.current[o.id] = o.status; });
+        lastOrderIdRef.current = Math.max(...orders.map((o) => o.id));
+        orders.forEach((o) => {
+          lastStatusMapRef.current[o.id] = o.status;
+        });
       }
     } catch {
       // Silently ignore network errors during polling
@@ -92,21 +135,27 @@ export function useOrderTracking({
   onStatusChange,
   intervalMs = 6000,
 }: UseOrderTrackingOptions) {
-  const lastStatusRef = useRef<string>('');
-  const timerRef      = useRef<ReturnType<typeof setInterval>>();
+  const lastStatusRef = useRef<string>("");
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
     if (!orderNumber) return;
 
     const poll = async () => {
       try {
-        const res   = await orderApi.getOrderByNumber(orderNumber);
-        const order = res.data.data as { status: OrderStatus; estimated_ready_at?: string };
+        const res = await orderApi.getOrderByNumber(orderNumber);
+        const order = res.data.data as {
+          status: OrderStatus;
+          estimated_ready_at?: string;
+        };
 
         if (order.status !== lastStatusRef.current) {
           lastStatusRef.current = order.status;
           const eta = order.estimated_ready_at
-            ? new Date(order.estimated_ready_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            ? new Date(order.estimated_ready_at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
             : undefined;
           onStatusChange?.(order.status, eta);
         }

@@ -297,7 +297,10 @@ export default function AdminUsers() {
     queryKey: ["admin-users-list", roleFilter],
     queryFn: () =>
       userApi.getAll({ role: roleFilter || undefined, per_page: 100 }),
-    select: (res) => ((res.data.data as any)?.data as User[]) ?? [],
+    select: (res) => {
+      const raw: any = res.data.data as any;
+      return (Array.isArray(raw) ? raw : (raw?.data ?? [])) as User[];
+    },
   });
   const users = usersData ?? [];
 

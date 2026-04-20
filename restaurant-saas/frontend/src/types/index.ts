@@ -4,21 +4,41 @@
 
 // ─── ENUMS ──────────────────────────────────
 
-export type UserRole = 'super_admin' | 'owner' | 'manager' | 'cashier' | 'chef' | 'customer' | 'guest';
+export type UserRole =
+  | "super_admin"
+  | "owner"
+  | "manager"
+  | "cashier"
+  | "chef"
+  | "customer"
+  | "guest";
 
-export type OrderStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'delivered' | 'cancelled';
+// ─── Order status ─────────────────────────────
+//
+//  Dine-in:          pending → accepted → preparing → served → completed
+//  Delivery/Pickup:  pending → accepted → preparing → ready  → delivered
+//
+export type OrderStatus =
+  | "pending"
+  | "accepted"
+  | "preparing"
+  | "served"           // dine-in only: chef marks food delivered to table
+  | "ready"            // delivery/pickup only: order ready for collection
+  | "delivered"        // delivery/pickup final state
+  | "completed"        // dine-in final state (after payment via /checkout)
+  | "cancelled";
 
-export type OrderType = 'dine_in' | 'delivery' | 'pickup';
+export type OrderType = "dine_in" | "delivery" | "pickup";
 
-export type PaymentMethod = 'card' | 'cash';
+export type PaymentMethod = "card" | "cash";
 
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
 
-export type ProductStatus = 'active' | 'inactive' | 'out_of_stock';
+export type ProductStatus = "active" | "inactive" | "out_of_stock";
 
-export type DiscountType = 'percentage' | 'fixed';
+export type DiscountType = "percentage" | "fixed";
 
-export type Theme = 'dark' | 'light' | 'warm' | 'ocean' | 'custom';
+export type Theme = "dark" | "light" | "warm" | "ocean" | "custom";
 
 // ─── BRANCH ──────────────────────────────────
 
@@ -39,21 +59,7 @@ export interface Branch {
   is_accepting_orders: boolean;
   opening_hours: OpeningHours[];
   settings: BranchSettings;
-  // Optionally loaded from backend join
-  restaurant?: {
-    id: number;
-    name: string;
-    description?: string;
-    cuisine_type?: string;
-    branding?: {
-      theme?: string;
-      primary_color?: string;
-      font_display?: string;
-      font_body?: string;
-      tagline?: string;
-      about_text?: string;
-    };
-  };
+  restaurant?: Partial<Restaurant>;
   created_at: string;
   updated_at: string;
 }
@@ -209,18 +215,19 @@ export interface CartItem {
   quantity: number;
   selected_variant?: ProductVariant;
   selected_addons: ProductAddon[];
-  special_instructions: string;
+  special_instructions?: string;
   unit_price: number;
   total_price: number;
 }
 
 export interface Cart {
-  branch_id: number;
+  branch_id: number | null;
   items: CartItem[];
   subtotal: number;
   discount: number;
   delivery_fee: number;
   total: number;
+  coupon_id?: number | null;
   applied_coupon?: Coupon;
   order_type: OrderType;
 }
@@ -239,8 +246,8 @@ export interface Order {
   payment_method: PaymentMethod;
   payment_status: PaymentStatus;
   customer_name: string;
-  customer_phone: string | null; // encrypted
-  customer_address: string | null; // encrypted
+  customer_phone: string | null;
+  customer_address: string | null;
   table_number: string | null;
   special_instructions: string | null;
   items: OrderItem[];
@@ -253,7 +260,8 @@ export interface Order {
   coupon?: Coupon;
   estimated_ready_at: string | null;
   accepted_at: string | null;
-  ready_at: string | null;
+  served_at: string | null;    // dine-in: when chef marked served
+  ready_at: string | null;     // delivery/pickup: when marked ready
   delivered_at: string | null;
   created_at: string;
   updated_at: string;
@@ -305,7 +313,7 @@ export interface AnalyticsOverview {
   guest_orders: number;
   registered_orders: number;
   cancelled_orders: number;
-  period: 'day' | 'week' | 'month' | 'year';
+  period: "day" | "week" | "month" | "year";
   comparison: {
     revenue_change: number;
     orders_change: number;
@@ -344,7 +352,7 @@ export interface DiscountAnalytics {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   timestamp: Date;
   suggested_products?: Product[];
@@ -455,7 +463,7 @@ export interface Notification {
   id: number;
   user_id: number;
   branch_id: number | null;
-  type: 'new_order' | 'order_ready' | 'low_stock' | 'new_coupon' | 'system';
+  type: "new_order" | "order_ready" | "low_stock" | "new_coupon" | "system";
   title: string;
   body: string | null;
   data: Record<string, unknown> | null;
@@ -463,6 +471,7 @@ export interface Notification {
   read_at: string | null;
   created_at: string;
 }
+
 // ─── THEME ENGINE ─────────────────────────────
 
 export interface ThemeConfig {

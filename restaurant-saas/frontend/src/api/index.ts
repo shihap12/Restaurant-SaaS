@@ -125,7 +125,29 @@ export const orderApi = {
   getById: (id: number) => api.get<ApiResponse<unknown>>(`/orders/${id}`),
   create: (data: unknown) => api.post<ApiResponse<unknown>>("/orders", data),
   updateStatus: (id: number, status: string) =>
-    api.patch(`/orders/${id}/status`, { status }),
+    api.patch(`/orders/${id}/status`, { status }).then((res) => {
+      try {
+        // Broadcast via BroadcastChannel when available (more reliable)
+        if (typeof BroadcastChannel !== "undefined") {
+          try {
+            const bc = new BroadcastChannel("restory:orders");
+            bc.postMessage({ id, status, ts: Date.now() });
+            bc.close();
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // Fallback: write to localStorage so other tabs receive a storage event
+        localStorage.setItem(
+          "restory:order:update",
+          JSON.stringify({ id, status, ts: Date.now() }),
+        );
+      } catch (e) {
+        // ignore storage/broadcast errors
+      }
+      return res;
+    }),
   getGuestOrders: (guestId: string) =>
     api.get<ApiResponse<unknown[]>>("/orders/guest", {
       params: { guest_id: guestId },

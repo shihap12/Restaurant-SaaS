@@ -8,6 +8,7 @@ import {
   Package,
   Home,
   ArrowLeft,
+  UtensilsCrossed,
 } from "lucide-react";
 import { orderApi } from "@/api";
 import type { Order, OrderStatus } from "@/types";
@@ -15,7 +16,52 @@ import { useOrderTracking } from "@/hooks/useWebSocket";
 import { usePageTransition } from "@/hooks/useGSAP";
 import gsap from "gsap";
 
-const STATUS_STEPS: {
+// ─── Steps per order type ─────────────────────────────────────────────────
+//
+//  Dine-in:          pending → accepted → preparing → served → completed
+//  Delivery/Pickup:  pending → accepted → preparing → ready  → delivered
+//
+// ─────────────────────────────────────────────────────────────────────────
+
+const STEPS_DINE_IN: {
+  status: OrderStatus;
+  label: string;
+  icon: React.ReactNode;
+  desc: string;
+}[] = [
+  {
+    status: "pending",
+    label: "Order Placed",
+    icon: <Clock size={20} />,
+    desc: "Waiting for confirmation",
+  },
+  {
+    status: "accepted",
+    label: "Accepted",
+    icon: <CheckCircle2 size={20} />,
+    desc: "Restaurant confirmed your order",
+  },
+  {
+    status: "preparing",
+    label: "Preparing",
+    icon: <ChefHat size={20} />,
+    desc: "Our chefs are cooking your meal",
+  },
+  {
+    status: "served",
+    label: "Served",
+    icon: <UtensilsCrossed size={20} />,
+    desc: "Your meal has been served. Enjoy! 🍽️",
+  },
+  {
+    status: "completed",
+    label: "Completed",
+    icon: <Home size={20} />,
+    desc: "Thank you for dining with us! 🎉",
+  },
+];
+
+const STEPS_DELIVERY: {
   status: OrderStatus;
   label: string;
   icon: React.ReactNode;
@@ -53,6 +99,10 @@ const STATUS_STEPS: {
   },
 ];
 
+// Final statuses per type — used for localStorage cleanup & celebration screen
+const DONE_STATUSES_DINE_IN: OrderStatus[] = ["completed", "cancelled"];
+const DONE_STATUSES_DELIVERY: OrderStatus[] = ["delivered", "cancelled"];
+
 export default function OrderTrackingPage() {
   const { orderNumber } = useParams<{ orderNumber: string }>();
   const pageRef = useRef<HTMLDivElement>(null);
@@ -68,42 +118,61 @@ export default function OrderTrackingPage() {
     enabled: !!orderNumber,
   });
 
-  useEffect(() => {
-    if (order) {
-      setCurrentStatus(order.status);
+  // Pick the right steps based on order type
+  const isDineIn = order?.type === "dine_in";
+  const STATUS_STEPS = isDineIn ? STEPS_DINE_IN : STEPS_DELIVERY;
+  const doneStatuses = isDineIn ? DONE_STATUSES_DINE_IN : DONE_STATUSES_DELIVERY;
 
-      // Sync active_order in localStorage
-      const doneStatuses = ["delivered", "cancelled"];
-      try {
-        if (doneStatuses.includes(order.status)) {
-          localStorage.removeItem("active_order");
-          // notify same-tab listeners
-          try {
-            window.dispatchEvent(
-              new CustomEvent("active_order_changed", {
-                detail: { status: order.status },
-              }),
-            );
-          } catch {}
-        } else {
-          const active: Record<string, any> = {
-            orderNumber: order.order_number,
-            status: order.status,
-          };
-          if (order.branch && order.branch.slug)
-            active.slug = order.branch.slug;
-          localStorage.setItem("active_order", JSON.stringify(active));
-          try {
-            window.dispatchEvent(
-              new CustomEvent("active_order_changed", { detail: active }),
-            );
-          } catch {}
-        }
-      } catch {}
-    }
+  useEffect(() => {
+    if (!order) return;
+    setCurrentStatus(order.status);
+
+    try {
+      if (doneStatuses.includes(order.status)) {
+        localStorage.removeItem("active_order");
+        try {
+          window.dispatchEvent(
+            new CustomEvent("active_order_changed", {
+              detail: { status: order.status },
+            }),
+          );
+        } catch {}
+      } else {
+        const active: Record<string, unknown> = {
+          orderNumber: order.order_number,
+          status: order.status,
+        };
+        if (order.branch?.slug) active.slug = order.branch.slug;
+        localStorage.setItem("active_order", JSON.stringify(active));
+        try {
+          window.dispatchEvent(
+            new CustomEvent("active_order_changed", { detail: active }),
+          );
+        } catch {}
+      }
+    } catch {}
   }, [order]);
 
-  // Real-time tracking
+  // ─── FIX: استمع لـ CustomEvent وأعد الجلب فورًا ──────────────────────────
+  // هذا يجعل صفحة التتبع تستجيب فوريًا عند تحديث الشيف أو الكاشير
+  // بدلاً من الانتظار للـ polling interval التالي (6 ثوانٍ)
+  useEffect(() => {
+    function handleOrderUpdate() {
+      refetch();
+    }
+
+    window.addEventListener(
+      "restory:order:update",
+      handleOrderUpdate as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "restory:order:update",
+        handleOrderUpdate as EventListener,
+      );
+  }, [refetch]);
+
+  // Real-time tracking via polling
   useOrderTracking({
     orderNumber: orderNumber || "",
     onStatusChange: (status, newEta) => {
@@ -111,9 +180,7 @@ export default function OrderTrackingPage() {
       if (newEta) setEta(newEta);
       refetch();
 
-      // Update localStorage for active order status
       try {
-        const doneStatuses = ["delivered", "cancelled"];
         if (doneStatuses.includes(status)) {
           localStorage.removeItem("active_order");
           try {
@@ -140,7 +207,7 @@ export default function OrderTrackingPage() {
         }
       } catch {}
 
-      // Animate the step
+      // Animate the active step
       const stepEl = document.querySelector(`[data-step="${status}"]`);
       if (stepEl) {
         gsap.fromTo(
@@ -155,9 +222,15 @@ export default function OrderTrackingPage() {
   const currentStepIndex = STATUS_STEPS.findIndex(
     (s) => s.status === currentStatus,
   );
-  const sym = order?.branch?.currency_symbol || "$";
 
+  const sym = order?.branch?.currency_symbol || "$";
   const backTo = order?.branch?.slug ? `/${order.branch.slug}` : "/";
+
+  // Celebration condition differs per type
+  const isCompleted =
+    isDineIn
+      ? currentStatus === "completed"
+      : currentStatus === "delivered";
 
   return (
     <div
@@ -195,7 +268,9 @@ export default function OrderTrackingPage() {
             >
               {order.type === "dine_in"
                 ? `Table ${order.table_number}`
-                : order.type}
+                : order.type === "delivery"
+                  ? "Delivery"
+                  : "Pickup"}
               {" · "}
               {sym}
               {order.total.toFixed(2)}
@@ -212,7 +287,7 @@ export default function OrderTrackingPage() {
         {/* Status Timeline */}
         <div className="card p-6 mb-6">
           <div className="relative">
-            {/* Vertical line */}
+            {/* Background line */}
             <div
               className="absolute left-6 top-6 bottom-6 w-0.5"
               style={{ background: "var(--border)" }}
@@ -223,7 +298,7 @@ export default function OrderTrackingPage() {
               style={{
                 background: "var(--brand-500)",
                 height:
-                  currentStepIndex === 0
+                  currentStepIndex <= 0
                     ? "0%"
                     : `${(currentStepIndex / (STATUS_STEPS.length - 1)) * 100}%`,
               }}
@@ -355,7 +430,7 @@ export default function OrderTrackingPage() {
             <div className="divider" />
 
             <div className="flex justify-between text-sm font-bold">
-              <span style={{ color: "var(--text-primary)" }}>Total Paid</span>
+              <span style={{ color: "var(--text-primary)" }}>Total</span>
               <span style={{ color: "var(--brand-400)" }}>
                 {sym}
                 {order.total.toFixed(2)}
@@ -364,14 +439,15 @@ export default function OrderTrackingPage() {
           </div>
         )}
 
-        {currentStatus === "delivered" && (
+        {/* Completion screen */}
+        {isCompleted && (
           <div className="text-center mt-8 animate-slide-up">
             <div className="text-5xl mb-3">🎉</div>
             <h2
               className="text-xl font-display font-bold mb-2"
               style={{ color: "var(--text-primary)" }}
             >
-              Enjoy your meal!
+              {isDineIn ? "Hope you enjoyed your meal!" : "Enjoy your meal!"}
             </h2>
             <Link to={backTo} className="btn btn-primary mt-3">
               Order Again

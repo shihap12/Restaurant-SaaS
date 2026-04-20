@@ -201,7 +201,7 @@ export default function ManagerStaff() {
     queryKey: ["staff", branchId],
     queryFn: () => userApi.getAll({ branch_id: branchId }),
     select: (res) => {
-      const raw = res.data.data;
+      const raw: any = res?.data?.data;
       return (Array.isArray(raw) ? raw : (raw?.data ?? [])) as User[];
     },
   });

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CreditCard, Check, X, Search, RefreshCw } from "lucide-react";
 import { orderApi } from "@/api";
@@ -8,6 +8,17 @@ import { useBranchOrders } from "@/hooks/useWebSocket";
 import { usePageTransition } from "@/hooks/useGSAP";
 import toast from "react-hot-toast";
 import { formatDistanceToNow } from "date-fns";
+
+// ─── Backend status flows ──────────────────────────────────────────────────
+//
+//  Dine-in:          pending → accepted → preparing → served → (checkout) → completed
+//  Delivery/Pickup:  pending → accepted → preparing → ready  → delivered
+//
+//  Chef handles:     accepted → preparing  (all types)
+//                    preparing → served    (dine-in only)
+//  Cashier handles:  everything else
+//
+// ──────────────────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<
   string,
@@ -21,8 +32,14 @@ const STATUS_CONFIG: Record<
     bg: "rgba(249,115,22,0.1)",
   },
   ready: { label: "Ready", color: "#4ade80", bg: "rgba(34,197,94,0.1)" },
+  served: { label: "Served", color: "#a78bfa", bg: "rgba(167,139,250,0.1)" },
   delivered: {
     label: "Delivered",
+    color: "#a3a3a3",
+    bg: "rgba(163,163,163,0.1)",
+  },
+  completed: {
+    label: "Completed",
     color: "#a3a3a3",
     bg: "rgba(163,163,163,0.1)",
   },
@@ -45,6 +62,13 @@ export default function CashierDashboard() {
   const [filterStatus, setFilterStatus] = useState<string>("active");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const sym = currentBranch?.currency_symbol || "$";
+
+  // ─── FIX: ref يعكس آخر قيمة لـ selectedOrder دائمًا ───────────────────
+  // هذا يحل مشكلة الـ stale closure داخل event listeners
+  const selectedOrderRef = useRef<Order | null>(null);
+  useEffect(() => {
+    selectedOrderRef.current = selectedOrder;
+  }, [selectedOrder]);
 
   const {
     data: orders = [],
@@ -73,17 +97,57 @@ export default function CashierDashboard() {
       queryClient.invalidateQueries({ queryKey: ["cashier-orders"] }),
   });
 
+  // ─── FIX: استخدام selectedOrderRef بدلاً من selectedOrder داخل الـ listener
+  // الـ dependency array فارغ لأننا نعتمد على الـ ref وليس الـ state مباشرة
+  useEffect(() => {
+    function handleOrderUpdate(e: any) {
+      const payload = e?.detail;
+      if (!payload || !payload.id) return;
+      const id = payload.id as number;
+
+      // دائمًا أعد تحميل قائمة الطلبات عند أي تحديث
+      queryClient.invalidateQueries({ queryKey: ["cashier-orders"] });
+
+      // إذا كان الطلب المحدَّث هو المفتوح حاليًا، اجلب بياناته الجديدة
+      if (selectedOrderRef.current?.id === id) {
+        orderApi
+          .getById(id)
+          .then((res) => {
+            const fresh = res?.data?.data as Order | undefined;
+            if (fresh) setSelectedOrder(fresh);
+          })
+          .catch(() => {
+            // تجاهل أخطاء الشبكة بصمت
+          });
+      }
+    }
+
+    window.addEventListener(
+      "restory:order:update",
+      handleOrderUpdate as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "restory:order:update",
+        handleOrderUpdate as EventListener,
+      );
+  }, []); // ← فارغ عن قصد — نعتمد على selectedOrderRef
+
   const updateStatus = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       orderApi.updateStatus(id, status),
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["cashier-orders"] });
-      if (selectedOrder?.id === vars.id) {
-        setSelectedOrder((prev) =>
-          prev ? { ...prev, status: vars.status as OrderStatus } : null,
-        );
-      }
+      setSelectedOrder((prev) =>
+        prev?.id === vars.id
+          ? { ...prev, status: vars.status as OrderStatus }
+          : prev,
+      );
       toast.success("Order updated!");
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || "Failed to update order.";
+      toast.error(msg);
     },
   });
 
@@ -97,22 +161,94 @@ export default function CashierDashboard() {
     }) => orderApi.checkout(id, { payment_method }),
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["cashier-orders"] });
-      if (selectedOrder?.id === vars.id) {
-        setSelectedOrder((prev) =>
-          prev
-            ? { ...prev, payment_status: "paid", status: "delivered" }
-            : null,
-        );
-      }
+      setSelectedOrder((prev) =>
+        prev?.id === vars.id
+          ? {
+              ...prev,
+              payment_status: "paid",
+              status: "completed" as OrderStatus,
+            }
+          : prev,
+      );
       toast.success("Payment recorded. Order closed.");
     },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || "Checkout failed.";
+      toast.error(msg);
+    },
   });
+
+  // ─── Next action for cashier ───────────────────────────────────────────
+  function getNextAction(
+    order: Order,
+  ): { label: string; color?: string; onClick: () => void } | null {
+    const isDineIn = order.type === "dine_in";
+
+    if (isDineIn) {
+      switch (order.status) {
+        case "pending":
+          return {
+            label: "Accept Order ✅",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "accepted" }),
+          };
+        case "accepted":
+          return {
+            label: "Start Preparing 👨‍🍳",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "preparing" }),
+          };
+        // preparing → served: CHEF's job — cashier waits
+        // served → payment: shown via showPaymentButtons below
+        default:
+          return null;
+      }
+    } else {
+      switch (order.status) {
+        case "pending":
+          return {
+            label: "Accept Order ✅",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "accepted" }),
+          };
+        case "accepted":
+          return {
+            label: "Start Preparing 👨‍🍳",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "preparing" }),
+          };
+        case "preparing":
+          return {
+            label: "Mark Ready 📦",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "ready" }),
+          };
+        case "ready":
+          return {
+            label: "Mark Delivered ✅",
+            color: "#22c55e",
+            onClick: () =>
+              updateStatus.mutate({ id: order.id, status: "delivered" }),
+          };
+        default:
+          return null;
+      }
+    }
+  }
+
+  // Payment buttons: dine-in only after chef marks served
+  const showPaymentButtons = (order: Order) =>
+    order.type === "dine_in" &&
+    order.status === "served" &&
+    order.payment_status !== "paid";
+
+  const canCancel = (order: Order) =>
+    ["pending", "accepted", "preparing"].includes(order.status);
 
   return (
     <div ref={pageRef} className="h-full flex gap-4 overflow-hidden">
       {/* Orders List */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Toolbar */}
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex-1">
             <Search
@@ -127,7 +263,6 @@ export default function CashierDashboard() {
               className="input pl-9 text-sm"
             />
           </div>
-
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
@@ -136,10 +271,13 @@ export default function CashierDashboard() {
             <option value="active">Active</option>
             <option value="">All Today</option>
             <option value="pending">Pending</option>
+            <option value="accepted">Accepted</option>
+            <option value="preparing">Preparing</option>
+            <option value="served">Served</option>
             <option value="ready">Ready</option>
             <option value="delivered">Delivered</option>
+            <option value="completed">Completed</option>
           </select>
-
           <button
             onClick={() => refetch()}
             className="btn btn-secondary btn-icon"
@@ -148,7 +286,6 @@ export default function CashierDashboard() {
           </button>
         </div>
 
-        {/* Orders */}
         <div className="flex-1 overflow-y-auto space-y-2 pr-1">
           {isLoading ? (
             [...Array(5)].map((_, i) => (
@@ -224,10 +361,14 @@ export default function CashierDashboard() {
                         {order.total.toFixed(2)}
                       </p>
                       <p
-                        className="text-xs capitalize"
+                        className="text-xs"
                         style={{ color: "var(--text-muted)" }}
                       >
-                        {order.payment_method}
+                        {order.type === "dine_in"
+                          ? "🍽️ Dine-in"
+                          : order.type === "delivery"
+                            ? "🛵 Delivery"
+                            : "🏃 Pickup"}
                       </p>
                     </div>
                   </div>
@@ -280,8 +421,12 @@ export default function CashierDashboard() {
               </div>
               <div className="flex justify-between">
                 <span>Type</span>
-                <span className="capitalize">
-                  {selectedOrder.type.replace("_", "-")}
+                <span>
+                  {selectedOrder.type === "dine_in"
+                    ? "🍽️ Dine-in"
+                    : selectedOrder.type === "delivery"
+                      ? "🛵 Delivery"
+                      : "🏃 Pickup"}
                 </span>
               </div>
               {selectedOrder.table_number && (
@@ -293,6 +438,22 @@ export default function CashierDashboard() {
                 </div>
               )}
               <div className="flex justify-between">
+                <span>Status</span>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-medium"
+                  style={{
+                    background:
+                      STATUS_CONFIG[selectedOrder.status]?.bg ||
+                      "rgba(163,163,163,0.1)",
+                    color:
+                      STATUS_CONFIG[selectedOrder.status]?.color || "#a3a3a3",
+                  }}
+                >
+                  {STATUS_CONFIG[selectedOrder.status]?.label ||
+                    selectedOrder.status}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span>Payment</span>
                 <span className="capitalize">
                   {selectedOrder.payment_method}
@@ -302,7 +463,6 @@ export default function CashierDashboard() {
 
             <div className="divider" />
 
-            {/* Items */}
             <div className="space-y-2 mb-4 flex-1">
               {selectedOrder.items.map((item) => (
                 <div key={item.id} className="flex justify-between text-sm">
@@ -326,65 +486,66 @@ export default function CashierDashboard() {
               </span>
             </div>
 
-            {/* Actions */}
             <div className="mt-4 space-y-2">
-              {selectedOrder.status === "pending" && (
-                <button
-                  onClick={() =>
-                    updateStatus.mutate({
-                      id: selectedOrder.id,
-                      status: "accepted",
-                    })
-                  }
-                  className="btn btn-primary w-full gap-2 text-sm"
-                >
-                  <Check size={15} /> Accept Order
-                </button>
-              )}
-              {selectedOrder.status === "ready" && (
-                <button
-                  onClick={() =>
-                    updateStatus.mutate({
-                      id: selectedOrder.id,
-                      status: "delivered",
-                    })
-                  }
-                  className="btn btn-primary w-full gap-2 text-sm"
-                  style={{ background: "#22c55e" }}
-                >
-                  <Check size={15} /> Mark Delivered / Served
-                </button>
-              )}
+              {/* Primary action */}
+              {(() => {
+                const action = getNextAction(selectedOrder);
+                if (!action) return null;
+                return (
+                  <button
+                    onClick={action.onClick}
+                    className="btn btn-primary w-full gap-2 text-sm"
+                    style={action.color ? { background: action.color } : {}}
+                  >
+                    <Check size={15} /> {action.label}
+                  </button>
+                );
+              })()}
 
-              {/* For dine-in: allow cashier to record payment and close order */}
+              {/* Waiting for chef — dine-in preparing */}
               {selectedOrder.type === "dine_in" &&
-                selectedOrder.payment_status !== "paid" && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() =>
-                        checkoutMutation.mutate({
-                          id: selectedOrder.id,
-                          payment_method: "cash",
-                        })
-                      }
-                      className="btn btn-primary flex-1 text-sm"
-                    >
-                      Pay Cash
-                    </button>
-                    <button
-                      onClick={() =>
-                        checkoutMutation.mutate({
-                          id: selectedOrder.id,
-                          payment_method: "card",
-                        })
-                      }
-                      className="btn btn-secondary flex-1 text-sm"
-                    >
-                      Pay Card
-                    </button>
+                selectedOrder.status === "preparing" && (
+                  <div
+                    className="text-xs text-center py-2 rounded-lg"
+                    style={{
+                      background: "rgba(var(--brand-rgb),0.08)",
+                      color: "var(--brand-300)",
+                    }}
+                  >
+                    👨‍🍳 Waiting for chef to mark as served…
                   </div>
                 )}
-              {["pending", "accepted"].includes(selectedOrder.status) && (
+
+              {/* Payment buttons — dine-in after served */}
+              {showPaymentButtons(selectedOrder) && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() =>
+                      checkoutMutation.mutate({
+                        id: selectedOrder.id,
+                        payment_method: "cash",
+                      })
+                    }
+                    className="btn btn-primary flex-1 text-sm"
+                  >
+                    Pay Cash 💵
+                  </button>
+                  <button
+                    onClick={() =>
+                      checkoutMutation.mutate({
+                        id: selectedOrder.id,
+                        payment_method: "card",
+                      })
+                    }
+                    className="btn btn-secondary flex-1 text-sm"
+                  >
+                    Pay Card 💳
+                  </button>
+                </div>
+              )}
+
+              {/* Cancel */}
+              {canCancel(selectedOrder) && (
                 <button
                   onClick={() =>
                     updateStatus.mutate({

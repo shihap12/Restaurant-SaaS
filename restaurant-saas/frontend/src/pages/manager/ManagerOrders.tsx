@@ -7,6 +7,68 @@ import { useAuthStore, useBranchStore } from "@/store";
 import type { Order } from "@/types";
 import { formatDistanceToNow } from "date-fns";
 
+// ─── Backend status colours ───────────────────────────────────────────────
+const STATUS_COLORS: Record<string, string> = {
+  pending:            "#facc15",
+  accepted:           "#60a5fa",
+  preparing:          "var(--brand-400)",
+  ready:              "#4ade80",
+  served:             "#a78bfa",
+  checkout_requested: "#f472b6",
+  delivered:          "#a3a3a3",
+  completed:          "#a3a3a3",
+  cancelled:          "#f87171",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  pending:            "Pending",
+  accepted:           "Accepted",
+  preparing:          "Preparing",
+  ready:              "Ready",
+  served:             "Served",
+  checkout_requested: "Bill Requested",
+  delivered:          "Delivered",
+  completed:          "Completed",
+  cancelled:          "Cancelled",
+};
+
+// ─── Next-status helpers matching backend transitions ─────────────────────
+//
+//  Dine-in:   pending → preparing → served → checkout_requested → completed
+//  Others:    pending → accepted  → preparing → ready → delivered
+//
+function getNextStatus(order: Order): string | null {
+  if (order.type === "dine_in") {
+    const map: Record<string, string> = {
+      pending:   "preparing",
+      preparing: "served",
+      served:    "checkout_requested",
+    };
+    return map[order.status] ?? null;
+  }
+  const map: Record<string, string> = {
+    pending:   "accepted",
+    accepted:  "preparing",
+    preparing: "ready",
+    ready:     "delivered",
+  };
+  return map[order.status] ?? null;
+}
+
+function getNextLabel(order: Order): string | null {
+  const next = getNextStatus(order);
+  if (!next) return null;
+  const labels: Record<string, string> = {
+    preparing:          "Prepare",
+    served:             "Served",
+    checkout_requested: "Bill",
+    accepted:           "Accept",
+    ready:              "Ready",
+    delivered:          "Done ✅",
+  };
+  return labels[next] ?? next;
+}
+
 export default function ManagerOrders() {
   const pageRef = useRef<HTMLDivElement>(null);
   usePageTransition(pageRef as any);
@@ -34,27 +96,16 @@ export default function ManagerOrders() {
       orderApi.updateStatus(id, status),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["manager-orders", branchId] }),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || "Failed to update order.";
+      console.error(msg);
+    },
   });
 
-  const canUpdateForType = (type?: string) => {
-    // Managers should not control dine-in fast flow — cashier/chef handle it
-    if (type === "dine_in")
-      return ["super_admin", "owner", "cashier", "chef"].includes(
-        user?.role || "",
-      );
-    return ["super_admin", "owner", "manager", "cashier", "chef"].includes(
-      user?.role || "",
-    );
-  };
-
-  const STATUS_COLORS: Record<string, string> = {
-    pending: "#facc15",
-    accepted: "#60a5fa",
-    preparing: "var(--brand-400)",
-    ready: "#4ade80",
-    delivered: "#a3a3a3",
-    cancelled: "#f87171",
-  };
+  // Backend: only super_admin, owner, cashier, chef can change statuses
+  const canUpdate = ["super_admin", "owner", "cashier", "chef"].includes(
+    user?.role || "",
+  );
 
   return (
     <div ref={pageRef} className="space-y-5">
@@ -98,11 +149,14 @@ export default function ManagerOrders() {
             "accepted",
             "preparing",
             "ready",
+            "served",
+            "checkout_requested",
             "delivered",
+            "completed",
             "cancelled",
           ].map((s) => (
             <option key={s} value={s}>
-              {s}
+              {STATUS_LABELS[s] ?? s}
             </option>
           ))}
         </select>
@@ -140,129 +194,94 @@ export default function ManagerOrders() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
-                <tr
-                  key={order.id}
-                  style={{ borderBottom: "1px solid var(--border)" }}
-                  className="hover:bg-[var(--surface-3)] transition-colors"
-                >
-                  <td
-                    className="px-4 py-3 font-mono font-bold text-xs"
-                    style={{ color: "var(--text-primary)" }}
+              {orders.map((order) => {
+                const nextStatus = getNextStatus(order);
+                const nextLabel = getNextLabel(order);
+                return (
+                  <tr
+                    key={order.id}
+                    style={{ borderBottom: "1px solid var(--border)" }}
+                    className="hover:bg-[var(--surface-3)] transition-colors"
                   >
-                    #{order.order_number}
-                  </td>
-                  <td
-                    className="px-4 py-3"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {order.customer_name}
-                    {order.table_number && (
-                      <span style={{ color: "var(--text-muted)" }}>
-                        {" "}
-                        · T{order.table_number}
-                      </span>
-                    )}
-                  </td>
-                  <td
-                    className="px-4 py-3 text-xs capitalize"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {order.type.replace("_", "-")}
-                  </td>
-                  <td
-                    className="px-4 py-3"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {order.items.length}
-                  </td>
-                  <td
-                    className="px-4 py-3 font-bold"
-                    style={{ color: "var(--brand-400)" }}
-                  >
-                    {sym}
-                    {order.total.toFixed(2)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className="badge text-xs capitalize"
-                      style={{
-                        background: `${STATUS_COLORS[order.status]}18`,
-                        color: STATUS_COLORS[order.status],
-                        border: `1px solid ${STATUS_COLORS[order.status]}30`,
-                      }}
+                    <td
+                      className="px-4 py-3 font-mono font-bold text-xs"
+                      style={{ color: "var(--text-primary)" }}
                     >
-                      {order.status}
-                    </span>
-                  </td>
-                  <td
-                    className="px-4 py-3 text-xs"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {formatDistanceToNow(new Date(order.created_at), {
-                      addSuffix: true,
-                    })}
-                  </td>
-                  <td className="px-4 py-3">
-                    {canUpdateForType(order.type) &&
-                      order.status === "pending" && (
+                      #{order.order_number}
+                    </td>
+                    <td
+                      className="px-4 py-3"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {order.customer_name}
+                      {order.table_number && (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" "}
+                          · T{order.table_number}
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className="px-4 py-3 text-xs capitalize"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {order.type === "dine_in"
+                        ? "🍽️ Dine-in"
+                        : order.type === "delivery"
+                          ? "🛵 Delivery"
+                          : "🏃 Pickup"}
+                    </td>
+                    <td
+                      className="px-4 py-3"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {order.items.length}
+                    </td>
+                    <td
+                      className="px-4 py-3 font-bold"
+                      style={{ color: "var(--brand-400)" }}
+                    >
+                      {sym}
+                      {order.total.toFixed(2)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className="badge text-xs"
+                        style={{
+                          background: `${STATUS_COLORS[order.status] ?? "#a3a3a3"}18`,
+                          color: STATUS_COLORS[order.status] ?? "#a3a3a3",
+                          border: `1px solid ${STATUS_COLORS[order.status] ?? "#a3a3a3"}30`,
+                        }}
+                      >
+                        {STATUS_LABELS[order.status] ?? order.status}
+                      </span>
+                    </td>
+                    <td
+                      className="px-4 py-3 text-xs"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      {formatDistanceToNow(new Date(order.created_at), {
+                        addSuffix: true,
+                      })}
+                    </td>
+                    <td className="px-4 py-3">
+                      {canUpdate && nextStatus && nextLabel && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({
                               id: order.id,
-                              status: "accepted",
+                              status: nextStatus,
                             })
                           }
                           className="btn btn-primary btn-sm text-xs"
                         >
-                          Accept
+                          {nextLabel}
                         </button>
                       )}
-                    {canUpdateForType(order.type) &&
-                      order.status === "accepted" && (
-                        <button
-                          onClick={() =>
-                            updateStatus.mutate({
-                              id: order.id,
-                              status: "preparing",
-                            })
-                          }
-                          className="btn btn-secondary btn-sm text-xs"
-                        >
-                          Prepare
-                        </button>
-                      )}
-                    {canUpdateForType(order.type) &&
-                      order.status === "preparing" && (
-                        <button
-                          onClick={() =>
-                            updateStatus.mutate({
-                              id: order.id,
-                              status: "ready",
-                            })
-                          }
-                          className="btn btn-secondary btn-sm text-xs"
-                        >
-                          Ready
-                        </button>
-                      )}
-                    {canUpdateForType(order.type) &&
-                      order.status === "ready" && (
-                        <button
-                          onClick={() =>
-                            updateStatus.mutate({
-                              id: order.id,
-                              status: "delivered",
-                            })
-                          }
-                          className="btn btn-secondary btn-sm text-xs text-green-400"
-                        >
-                          Done
-                        </button>
-                      )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {orders.length === 0 && (

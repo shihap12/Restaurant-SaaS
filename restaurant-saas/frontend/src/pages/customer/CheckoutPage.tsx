@@ -123,10 +123,17 @@ export default function CheckoutPage() {
       setErrors(errs);
       return;
     }
+
+    // ─── FIX: dine_in → تخطى خطوة Payment وارسل الطلب مباشرة بـ cash ─────
+    if (order_type === "dine_in") {
+      placeOrder("cash");
+      return;
+    }
+
     setStep("payment");
   };
 
-  const placeOrder = async () => {
+  const placeOrder = async (forcedPaymentMethod?: PaymentMethod) => {
     setStep("confirming");
     try {
       const payload: Record<string, unknown> = {
@@ -134,7 +141,8 @@ export default function CheckoutPage() {
         guest_id: guestId,
         user_id: user?.id,
         type: order_type,
-        payment_method: paymentMethod,
+        // إذا dine_in نستخدم cash افتراضيًا، وإلا نستخدم اختيار المستخدم
+        payment_method: forcedPaymentMethod ?? paymentMethod,
         customer_name: form.customer_name,
         special_instructions: form.special_instructions,
         items: items.map((i) => ({
@@ -160,7 +168,7 @@ export default function CheckoutPage() {
       const order = res.data.data as { order_number: string; status?: string };
       clearCart();
 
-      // حفظ الطلب النشط بحيث يظهر الـ ActiveOrderBanner — احتفظ بالـ slug إن وُجد
+      // حفظ الطلب النشط بحيث يظهر الـ ActiveOrderBanner
       try {
         const active: Record<string, any> = {
           orderNumber: order.order_number,
@@ -181,15 +189,28 @@ export default function CheckoutPage() {
         (err as { response?: { data?: { message?: string } } })?.response?.data
           ?.message || "Failed to place order. Please try again.";
       toast.error(msg);
-      setStep("payment");
+      // إذا كان dine_in ارجع لـ details، وإلا ارجع لـ payment
+      setStep(order_type === "dine_in" ? "details" : "payment");
     }
   };
 
   if (items.length === 0) return null;
 
   // ── Progress steps ──────────────────────────
-  const STEPS = ["type", "details", "payment"] as const;
+  // dine_in: خطوتين فقط (type + details)
+  // delivery/pickup: ثلاث خطوات (type + details + payment)
+  const STEPS =
+    order_type === "dine_in"
+      ? (["type", "details"] as const)
+      : (["type", "details", "payment"] as const);
+
   const currentIdx = STEPS.indexOf(step as (typeof STEPS)[number]);
+
+  const STEP_LABELS: Record<string, string> = {
+    type: "Order Type",
+    details: "Your Info",
+    payment: "Payment",
+  };
 
   return (
     <div
@@ -237,13 +258,9 @@ export default function CheckoutPage() {
                       : "text-[var(--text-muted)]"
                   }`}
                 >
-                  {s === "type"
-                    ? "Order Type"
-                    : s === "details"
-                      ? "Your Info"
-                      : "Payment"}
+                  {STEP_LABELS[s]}
                 </span>
-                {i < 2 && (
+                {i < STEPS.length - 1 && (
                   <div
                     className="flex-1 h-px"
                     style={{
@@ -419,12 +436,12 @@ export default function CheckoutPage() {
               onClick={submitDetails}
               className="btn btn-primary btn-lg w-full"
             >
-              Continue to Payment
+              {order_type === "dine_in" ? "Place Order 🍽️" : "Continue to Payment"}
             </button>
           </div>
         )}
 
-        {/* ── STEP 3: Payment ── */}
+        {/* ── STEP 3: Payment (delivery/pickup only) ── */}
         {step === "payment" && (
           <div className="space-y-6 animate-slide-up">
             <h1
@@ -442,11 +459,9 @@ export default function CheckoutPage() {
                   icon: <Banknote size={22} />,
                   label: "Cash",
                   desc:
-                    order_type === "dine_in"
-                      ? "Pay at the table"
-                      : order_type === "delivery"
-                        ? "Pay on delivery"
-                        : "Pay at pickup",
+                    order_type === "delivery"
+                      ? "Pay on delivery"
+                      : "Pay at pickup",
                 },
                 {
                   method: "card" as PaymentMethod,
@@ -561,7 +576,7 @@ export default function CheckoutPage() {
             </div>
 
             <button
-              onClick={placeOrder}
+              onClick={() => placeOrder()}
               className="btn btn-primary btn-lg w-full"
             >
               Place Order — {sym}

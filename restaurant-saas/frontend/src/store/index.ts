@@ -139,6 +139,7 @@ function recalc(items: CartItem[], deliveryFee: number, coupon?: Coupon) {
 
 interface CartState extends Cart {
   isOpen: boolean;
+  setBranchId: (branchId: number) => void;
   addItem: (
     product: Product,
     qty: number,
@@ -153,6 +154,7 @@ interface CartState extends Cart {
   setOrderType: (type: OrderType) => void;
   setDeliveryFee: (fee: number) => void;
   clearCart: () => void;
+  recalculate: () => void;
   toggleCart: () => void;
   openCart: () => void;
   closeCart: () => void;
@@ -237,7 +239,7 @@ export const useCartStore = create<CartState>()(
             total_price: unitPrice * quantity,
             selected_variant: variant,
             selected_addons: addons || [],
-            special_instructions: instructions,
+            special_instructions: instructions ?? "",
           };
           set({ items: [...state.items, newItem] });
         }
@@ -275,8 +277,15 @@ export const useCartStore = create<CartState>()(
         get().recalculate();
       },
 
-      applyCoupon: (couponId, discount) => {
-        set({ coupon_id: couponId, discount });
+      applyCoupon: (coupon) => {
+        const items = get().items;
+        const deliveryFee = get().delivery_fee;
+        const { discount: computedDiscount } = recalc(
+          items,
+          deliveryFee,
+          coupon,
+        );
+        set({ coupon_id: coupon.id, discount: computedDiscount });
         get().recalculate();
       },
 

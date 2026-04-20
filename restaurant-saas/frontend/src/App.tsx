@@ -184,6 +184,58 @@ export default function App() {
     applyTheme();
   }, []);
 
+  // Listen for order updates broadcast via localStorage from other tabs
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (!e.key) return;
+      if (e.key !== "restory:order:update") return;
+      try {
+        // invalidate queries so UIs refresh
+        queryClient.invalidateQueries();
+        // parse payload and broadcast a CustomEvent for components that hold local state
+        const payload = e.newValue ? JSON.parse(e.newValue) : null;
+        if (payload && payload.id) {
+          window.dispatchEvent(
+            new CustomEvent("restory:order:update", { detail: payload }),
+          );
+        }
+      } catch (err) {
+        // ignore malformed payloads
+      }
+    }
+    window.addEventListener("storage", onStorage);
+
+    // BroadcastChannel listener (more reliable cross-tab messaging)
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        bc = new BroadcastChannel("restory:orders");
+        bc.addEventListener("message", (ev) => {
+          try {
+            const payload = ev.data;
+            queryClient.invalidateQueries();
+            if (payload && payload.id) {
+              window.dispatchEvent(
+                new CustomEvent("restory:order:update", { detail: payload }),
+              );
+            }
+          } catch (e) {
+            // ignore
+          }
+        });
+      }
+    } catch (e) {
+      bc = null;
+    }
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      try {
+        if (bc) bc.close();
+      } catch {}
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
