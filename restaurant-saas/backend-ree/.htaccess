@@ -1,0 +1,12 @@
+<IfModule mod_rewrite.c>
+    Options -MultiViews
+    RewriteEngine On
+    
+    # اترك الـ RewriteBase فاضي أو احذفه إذا كنت حاطط الملف داخل مجلد backend-ree
+    RewriteBase /backend-ree/
+
+    # التأكد من عدم وجود سلاش مكرر
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ index.php [L,QSA]
+</IfModule>
