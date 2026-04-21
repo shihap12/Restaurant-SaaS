@@ -57,9 +57,9 @@ Restaurant SaaS System is a production-grade SaaS platform that centralizes menu
 ## Tech Stack
 
 - **Frontend:** React (TypeScript), Vite, Tailwind CSS, Zustand, TanStack Query.
-- **Backend:** PHP (Laravel), REST API, Queue workers.
-- **Data & real-time:** MySQL (source of truth), Redis (cache + pub/sub), Laravel WebSockets.
-- **DevOps & Observability:** Docker Compose, Nginx, Supervisor, GitHub Actions, Sentry, Prometheus/Grafana.
+- **Backend:** PHP , REST API, Queue workers.
+- **Data & real-time:** MySQL (source of truth), Redis (cache + pub/sub),  WebSockets.
+- **DevOps & Observability:**  Supervisor, GitHub Actions, Sentry, Prometheus/Grafana.
 - **Testing:** PHPUnit (backend), Cypress (E2E).
 
 ## Architecture
@@ -67,7 +67,7 @@ Restaurant SaaS System is a production-grade SaaS platform that centralizes menu
 ### High-level design
 
 - SPA frontend issues REST commands and subscribes to WebSocket channels for live updates.
-- API (Laravel) validates requests, persists to MySQL, then publishes domain events to Redis.
+- API  validates requests, persists to MySQL, then publishes domain events to Redis.
 - WebSocket layer relays events to subscribed clients; workers perform async processing.
 
 ### Multi-branch concept
